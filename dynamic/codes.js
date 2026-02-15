@@ -26,7 +26,7 @@ const US_STATES = [
     {"MS": "Mississippi"},
     {"MO": "Missouri"},
     {"MT": "Montana"},
-    {"NE": "New England"},
+    {"NB": "Nebraska"},
     {"NV": "Nevada"},
     {"NH": "New Hampshire"},
     {"NJ": "New Jersey"},
