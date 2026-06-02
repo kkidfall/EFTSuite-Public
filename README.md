@@ -15,8 +15,8 @@ This new version of EFT Suite is inspired by the original OpenEFT (which I've be
 6.  **Interactive Editor**: Allows users to adjust bounding boxes for individual prints to ensure accuracy.
 7.  **Data Entry**: Validates and collects required Type-2 demographic data (Name, DOB, SSN, etc.).
 8.  **EFT Generation**: Uses compiled NBIS tools (`an2k`, `nfiq`, `opj_compress`) to generate compliant EFT files.
-9.  **Multi-Type Support**: Allows users to pick from Type-14 ("ATF-compliant, *suggested*) prints and full Type-4 (rolled) prints. **Note**: we recommend using ATF-compliant prints.
-10.  **Smart Compression**: Automatically ensures the final EFT file is under ATF's 12MB limit by adjusting compression ratios if needed.
+9.  **Multi-Type Support**: Allows users to pick from Type-14 prints and full Type-4 (rolled) prints. **Note**: By default, Type-14 is legacy and must be enabled in settings.
+10.  **Smart Compression**: Automatically ensures the final EFT file is under ATF's 12MB limit by adjusting NBIS lossless compression ratios if needed.
 
 ## Prerequisites
 
@@ -90,7 +90,7 @@ Select your scanned FD-258 image (JPG/PNG).
 
 ![Select print type](WebApp/static/img/4.jpg "Select print type")
 
-- Select your desired print type. We recommend going with the ATF-complaint Type-14 records, as the rolled (Type 4) are not used by the ATF.
+- Select your desired print type. Type 4 is enabled by default.
 
 
 ### **Verify Boxes**
