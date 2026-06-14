@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EFT Suite – Applicant Pre-Fill</title>
+
+<!-- Reuse the main app's stylesheet so this page matches visually.
+     This page is meant to live in WebApp/static/ alongside style.css. -->
+<link rel="stylesheet" href="/static/style.css">
+
+<!--
+  QR GENERATION LIBRARY (qrcodejs, ~20KB, pure JS, renders to a div).
+  For OFFLINE / air-gapped use (recommended), vendor it locally:
+      curl -L -o WebApp/static/qrcode.min.js \
+        https://cdn.jsdelivr.net/gh/davidshimjs/qrcodejs/qrcode.min.js
+  then change the src below to "/static/qrcode.min.js".
+-->
+<script src="https://cdn.jsdelivr.net/gh/davidshimjs/qrcodejs/qrcode.min.js"></script>
+
+<style>
+  body { padding: 20px; max-width: 900px; margin: 0 auto; }
+  .intake-header { text-align: center; margin-bottom: 20px; }
+  .intake-header img { max-width: 220px; }
+  #qr-result {
+    display: none; text-align: center; padding: 24px;
+    background: #fff; border-radius: 8px; margin-top: 20px;
+  }
+  #qr-canvas-holder { display: inline-block; padding: 16px; background: #fff; }
+  .privacy-note {
+    background: #2a2118; border: 1px solid #6b5320; color: #e0c98a;
+    padding: 12px 16px; border-radius: 6px; font-size: 0.9rem; margin-bottom: 20px;
+  }
+  .enc-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+  .enc-row input[type="password"] { flex: 1; }
+</style>
+</head>
+<body>
+
+<div class="intake-header">
+  <img src="/static/eftsuitelogo-wt.png" alt="EFT Suite">
+  <h2>Applicant Information Pre-Fill</h2>
+  <p style="color:#aaa;">Fill out your details below, then press <b>Generate QR Code</b>.
+     Bring the QR code (printed or on your phone) to your appointment.</p>
+</div>
+
+<div class="privacy-note">
+  ⚠ This form includes your Social Security Number. The QR code contains that
+  information. If you leave the passphrase field blank the QR is readable by anyone
+  who scans it — treat a printout like you would your SSN. For better protection,
+  set a passphrase below and give it to the operator separately; the QR will be
+  encrypted and useless without it.
+</div>
+
+<!-- This form is a faithful copy of the main app's #type2-form (same name="" attributes),
+     so the values map 1:1 when scanned back in. -->
+<form id="type2-form">
+  <div class="form-section">
+    <h3>Personal Details</h3>
+    <div class="form-grid-2-col">
+      <div class="form-group">
+        <label>First Name</label>
+        <input type="text" id="fname" name="fname" required class="sentence-case">
+      </div>
+      <div class="form-group">
+        <label>Middle Name (Optional)</label>
+        <div style="display:flex; gap:10px;">
+          <input type="text" id="mname" name="mname" class="sentence-case" style="flex:1">
+          <label style="display:flex; align-items:center; white-space:nowrap;">
+            <input type="checkbox" id="no-mn" style="width:auto; margin-right:5px;"> NMN
+          </label>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Last Name</label>
+        <input type="text" id="lname" name="lname" required class="sentence-case">
+      </div>
+      <div class="form-group">
+        <label>Date of Birth</label>
+        <input type="date" id="dob-input" name="dob" required>
+      </div>
+      <div class="form-group">
+        <label>Place of Birth</label>
+        <select name="2.020" id="pob-select" required></select>
+      </div>
+      <div class="form-group">
+        <label>Citizenship</label>
+        <select name="2.021" id="ctz-select" required></select>
+      </div>
+      <div class="form-group span-full">
+        <label>Social Security Number</label>
+        <div style="display:flex; gap:10px; align-items:center;">
+          <input type="text" name="2.016" pattern="\d{9}" placeholder="xxxxxxxxx" style="flex:1;">
+          <label style="display:flex; align-items:center; white-space:nowrap; font-size:0.9rem;">
+            <input type="checkbox" id="bypass-ssn" style="width:auto; margin-right:5px;"> Bypass SSN
+          </label>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="form-section">
+    <h3>Contact &amp; Address</h3>
+    <div class="form-grid-2-col">
+      <div class="form-group span-full">
+        <label>Street Address</label>
+        <input type="text" name="addr_street" required>
+      </div>
+      <div class="form-group">
+        <label>City</label>
+        <input type="text" name="addr_city" required>
+      </div>
+      <div class="form-group">
+        <label>State</label>
+        <select name="addr_state" id="addr-state" required></select>
+      </div>
+      <div class="form-group">
+        <label>ZIP Code</label>
+        <input type="text" name="addr_zip" required>
+      </div>
+    </div>
+  </div>
+
+  <div class="form-section">
+    <h3>Demographic Details</h3>
+    <div class="form-grid-2-col">
+      <div class="form-group">
+        <label>Sex</label>
+        <select name="2.024" required>
+          <option value="">Select...</option>
+          <option value="M">Male</option>
+          <option value="F">Female</option>
+          <option value="X">Other</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Race</label>
+        <select name="2.025" required>
+          <option value="">Select...</option>
+          <option value="A">Asian</option>
+          <option value="B">Black</option>
+          <option value="I">American Indian</option>
+          <option value="W">White / Hispanic</option>
+          <option value="U">Unknown</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Height</label>
+        <select id="height-select" name="2.027" required></select>
+      </div>
+      <div class="form-group">
+        <label>Weight (lbs)</label>
+        <input type="number" name="2.029" min="0" max="499" required>
+      </div>
+      <div class="form-group">
+        <label>Eye Color</label>
+        <select name="2.031" required>
+          <option value="">Select...</option>
+          <option value="BLK">Black</option>
+          <option value="BLU">Blue</option>
+          <option value="BRO">Brown</option>
+          <option value="GRY">Gray</option>
+          <option value="GRN">Green</option>
+          <option value="HAZ">Hazel</option>
+          <option value="MUL">Multi-Colored</option>
+          <option value="XXX">Unknown</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Hair Color</label>
+        <select name="2.032" required>
+          <option value="">Select...</option>
+          <option value="BAL">Bald</option>
+          <option value="BLK">Black</option>
+          <option value="BLN">Blonde</option>
+          <option value="BRO">Brown</option>
+          <option value="GRY">Gray</option>
+          <option value="RED">Red</option>
+          <option value="XXX">Unknown</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div class="form-section">
+    <h3>Optional: Encrypt the QR Code</h3>
+    <div class="form-group">
+      <label>Passphrase (leave blank for an unencrypted QR)</label>
+      <div class="enc-row">
+        <input type="password" id="enc-pass" placeholder="Give this to the operator separately">
+      </div>
+    </div>
+  </div>
+
+  <button type="button" id="btn-generate-qr" class="btn btn-primary" style="width:100%; margin-top:10px;">
+    Generate QR Code
+  </button>
+</form>
+
+<div id="qr-result">
+  <h3 style="color:#111;">Your Pre-Fill QR Code</h3>
+  <p style="color:#444; font-size:0.9rem;">Show this at your appointment. Print it or keep it on your phone.</p>
+  <div id="qr-canvas-holder"></div>
+  <div style="margin-top:14px;">
+    <button type="button" id="btn-print-qr" class="btn btn-secondary">Print</button>
+  </div>
+</div>
+
+<!-- Load the SAME codes list the main app uses, so dropdown values match exactly.
+     codes.js defines globals US_STATES and COUNTRIES. -->
+<script src="/static/codes.js"></script>
+<script>
+// ---- Populate dropdowns identically to the main app (see app.js populateDropdowns) ----
+(function populateDropdowns() {
+  const usStates = (typeof US_STATES !== 'undefined') ? US_STATES : [];
+  const countries = (typeof COUNTRIES !== 'undefined') ? COUNTRIES : [];
+  const all = [...usStates, ...countries];
+
+  const addOpts = (sel, list) => {
+    if (!sel) return;
+    list.forEach(obj => {
+      const key = Object.keys(obj)[0];
+      sel.add(new Option(`${obj[key]} (${key})`, key));
+    });
+  };
+
+  addOpts(document.getElementById('pob-select'), all);
+  const ctz = document.getElementById('ctz-select');
+  addOpts(ctz, all);
+  if (ctz) ctz.value = "US";
+  addOpts(document.getElementById('addr-state'), usStates);
+
+  const hSelect = document.getElementById('height-select');
+  if (hSelect) {
+    for (let h = 400; h <= 711; h++) {
+      const s = h.toString();
+      const inch = parseInt(s.substring(1));
+      if (inch <= 11) hSelect.add(new Option(`${s[0]}' ${inch}"`, h));
+    }
+  }
+})();
+
+// NMN checkbox mirrors the main app behaviour
+document.getElementById('no-mn').addEventListener('change', (e) => {
+  const mname = document.getElementById('mname');
+  if (e.target.checked) { mname.value = ""; mname.disabled = true; }
+  else { mname.disabled = false; }
+});
+
+// ---- Optional AES-GCM encryption (Web Crypto) ----
+const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+
+async function encryptPayload(plaintext, passphrase) {
+  const enc = new TextEncoder();
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const baseKey = await crypto.subtle.importKey(
+    "raw", enc.encode(passphrase), "PBKDF2", false, ["deriveKey"]
+  );
+  const key = await crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt, iterations: 150000, hash: "SHA-256" },
+    baseKey, { name: "AES-GCM", length: 256 }, false, ["encrypt"]
+  );
+  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, enc.encode(plaintext));
+  return { v: 1, t: "eftsuite-intake", enc: "AESGCM", kdf: "PBKDF2",
+           salt: b64(salt), iv: b64(iv), ct: b64(ct) };
+}
+
+// ---- Build payload + render QR ----
+document.getElementById('btn-generate-qr').onclick = async () => {
+  const form = document.getElementById('type2-form');
+  if (!form.checkValidity()) { form.reportValidity(); return; }
+
+  const fields = Object.fromEntries(new FormData(form).entries());
+  // Carry the two checkbox states that aren't part of FormData
+  const flags = {
+    no_mn: document.getElementById('no-mn').checked,
+    bypass_ssn: document.getElementById('bypass-ssn').checked
+  };
+
+  let payloadObj = { v: 1, t: "eftsuite-intake", fields, flags };
+  const passphrase = document.getElementById('enc-pass').value.trim();
+  if (passphrase) {
+    payloadObj = await encryptPayload(JSON.stringify({ fields, flags }), passphrase);
+  }
+
+  const payloadStr = JSON.stringify(payloadObj);
+
+  const holder = document.getElementById('qr-canvas-holder');
+  holder.innerHTML = "";
+  // correctLevel M balances density and resilience; payload is small so this is plenty.
+  new QRCode(holder, {
+    text: payloadStr,
+    width: 320, height: 320,
+    correctLevel: QRCode.CorrectLevel.M
+  });
+
+  document.getElementById('qr-result').style.display = "block";
+  document.getElementById('qr-result').scrollIntoView({ behavior: "smooth" });
+};
+
+document.getElementById('btn-print-qr').onclick = () => window.print();
+</script>
+</body>
+</html>
