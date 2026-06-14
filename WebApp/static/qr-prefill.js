@@ -91,19 +91,41 @@
       return;
     }
 
-    try {
-      if (obj.enc === "AESGCM") {
-        const pass = prompt("This pre-fill code is encrypted. Enter the applicant's passphrase:");
-        if (pass == null) return;
-        const data = await decryptPayload(obj, pass);
-        applyToForm(data.fields, data.flags);
-      } else {
-        applyToForm(obj.fields, obj.flags);
+    if (obj.enc === "AESGCM") {
+      const MAX = 3;
+      for (let attempt = 1; attempt <= MAX; attempt++) {
+        const left = MAX - attempt + 1;
+        const msg = attempt === 1
+          ? "This pre-fill code is encrypted. Enter the applicant's passphrase:"
+          : "Incorrect passphrase. " + left + " attempt" + (left === 1 ? "" : "s") +
+            " left. Enter the passphrase:";
+        const pass = prompt(msg);
+        if (pass === null) return; // operator cancelled — stop entirely
+
+        try {
+          const data = await decryptPayload(obj, pass);
+          applyToForm(data.fields, data.flags);
+          closeScanner();
+          flashStatus("Form pre-filled from QR. Please verify every field before generating.");
+          return;
+        } catch (e) {
+          if (attempt === MAX) {
+            alert("Incorrect passphrase — all " + MAX + " attempts used. " +
+                  "Scan or upload the code again to retry.");
+            return;
+          }
+          // otherwise: loop and re-prompt
+        }
       }
+      return;
+    }
+
+    try {
+      applyToForm(obj.fields, obj.flags);
       closeScanner();
       flashStatus("Form pre-filled from QR. Please verify every field before generating.");
     } catch (e) {
-      alert("Could not read the code. If it's encrypted, the passphrase may be wrong.");
+      alert("Could not read the code.");
     }
   }
 
@@ -165,12 +187,15 @@
     document.getElementById("qr-close-btn").onclick = closeScanner;
 
     document.getElementById("qr-file-input").onchange = (e) => {
-      const file = e.target.files && e.target.files[0];
+      const input = e.target;
+      const file = input.files && input.files[0];
       if (!file) return;
       const scanner = new Html5Qrcode("qr-reader", /* verbose */ false);
       scanner.scanFile(file, true)
-        .then((decoded) => { scanner.clear(); handleDecodedText(decoded); })
-        .catch(() => alert("No QR code found in that image. Try a clearer, straight-on photo."));
+        .then((decoded) => { try { scanner.clear(); } catch (_) {} return handleDecodedText(decoded); })
+        .catch(() => alert("No QR code found in that image. Try a clearer, straight-on photo."))
+        // Clear the value so picking the SAME file again still fires onchange.
+        .finally(() => { input.value = ""; });
     };
 
     // Try the live camera. The camera is only available on a "secure context"
@@ -187,22 +212,18 @@
 
     html5Qr = new Html5Qrcode("qr-reader", /* verbose */ false);
 
-    // Dense QR payloads need a bigger scan area + the native detector to decode
-    // from a live feed (a fixed small qrbox at low res is why preview shows but
-    // nothing decodes, even though file upload works).
+    // No fixed qrbox: scan the whole frame. A qrbox larger than the rendered
+    // viewfinder makes start() reject ("qrbox dimensions...") — and full-frame
+    // scanning with the native detector handles dense codes better anyway.
     const config = {
       fps: 15,
-      qrbox: (vw, vh) => {
-        const m = Math.floor(Math.min(vw, vh) * 0.8);
-        return { width: m, height: m };
-      },
       experimentalFeatures: { useBarCodeDetectorIfSupported: true }
     };
-    // Ask for a high-res rear camera; more pixels = denser QR resolves.
+    // Modest resolution bump; "ideal" degrades gracefully if unsupported.
     const camConstraints = {
       facingMode: "environment",
-      width: { ideal: 1920 },
-      height: { ideal: 1080 }
+      width: { ideal: 1280 },
+      height: { ideal: 720 }
     };
     const onDecode = (decoded) => { handleDecodedText(decoded); };
 
@@ -218,7 +239,8 @@
       })
       .catch((err) => {
         const name = (err && err.name) || "";
-        let msg = "Couldn't start the camera. Use \u201cScan from image\u201d instead.";
+        const detail = (err && (err.message || err.name)) || "unknown error";
+        let msg = "Couldn't start the camera (" + detail + "). Use \u201cScan from image\u201d instead.";
         if (/NotAllowedError|Permission/i.test(name))
           msg = "Camera permission was blocked. Allow camera access in the browser, then reopen the scanner — or use \u201cScan from image\u201d.";
         else if (/NotFoundError|No camera/i.test(name + (err && err.message)))
