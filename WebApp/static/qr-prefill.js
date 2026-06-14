@@ -144,7 +144,7 @@
       "display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:20px;";
     overlay.innerHTML = `
       <div style="color:#fff;font-size:1.1rem;font-weight:bold;">Scan Applicant QR Code</div>
-      <div id="qr-reader" style="width:320px;max-width:90vw;background:#000;border-radius:8px;overflow:hidden;"></div>
+      <div id="qr-reader" style="width:min(460px,92vw);background:#000;border-radius:8px;overflow:hidden;"></div>
       <div style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center;">
         <label class="btn btn-secondary" style="cursor:pointer;margin:0;">
           Scan from image
@@ -152,11 +152,15 @@
         </label>
         <button type="button" class="btn btn-secondary" id="qr-close-btn">Cancel</button>
       </div>
-      <div style="color:#aaa;font-size:.85rem;max-width:340px;text-align:center;">
-        Camera requires localhost or HTTPS. Otherwise use "Scan from image"
-        with a photo of the QR.
+      <div id="qr-status" style="color:#cdd6df;font-size:.85rem;max-width:360px;text-align:center;min-height:1.2em;">
+        Point the camera at the applicant's QR code.
       </div>`;
     document.body.appendChild(overlay);
+
+    const setStatus = (msg, isError) => {
+      const el = document.getElementById("qr-status");
+      if (el) { el.textContent = msg; el.style.color = isError ? "#ffb4b4" : "#cdd6df"; }
+    };
 
     document.getElementById("qr-close-btn").onclick = closeScanner;
 
@@ -169,20 +173,60 @@
         .catch(() => alert("No QR code found in that image. Try a clearer, straight-on photo."));
     };
 
-    // Try the live camera (best effort).
+    // Try the live camera. The camera is only available on a "secure context"
+    // (https:// or http://localhost) — fail loudly instead of silently so the
+    // operator knows to use the file fallback or switch to a secure URL.
+    if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setStatus(
+        "Camera unavailable: this page must be opened over https:// or http://localhost. " +
+        "Use \u201cScan from image\u201d below, or open the app on a secure URL.",
+        true
+      );
+      return; // file upload still works
+    }
+
     html5Qr = new Html5Qrcode("qr-reader", /* verbose */ false);
-    Html5Qrcode.getCameras()
-      .then((cams) => {
-        if (!cams || !cams.length) return; // file fallback still available
-        const camId = (cams.find((c) => /back|rear|environment/i.test(c.label)) || cams[0]).id;
-        html5Qr.start(
-          camId,
-          { fps: 10, qrbox: 250 },
-          (decoded) => { handleDecodedText(decoded); },
-          () => {} // ignore per-frame "not found" errors
-        ).catch(() => {});
+
+    // Dense QR payloads need a bigger scan area + the native detector to decode
+    // from a live feed (a fixed small qrbox at low res is why preview shows but
+    // nothing decodes, even though file upload works).
+    const config = {
+      fps: 15,
+      qrbox: (vw, vh) => {
+        const m = Math.floor(Math.min(vw, vh) * 0.8);
+        return { width: m, height: m };
+      },
+      experimentalFeatures: { useBarCodeDetectorIfSupported: true }
+    };
+    // Ask for a high-res rear camera; more pixels = denser QR resolves.
+    const camConstraints = {
+      facingMode: "environment",
+      width: { ideal: 1920 },
+      height: { ideal: 1080 }
+    };
+    const onDecode = (decoded) => { handleDecodedText(decoded); };
+
+    // Prefer the rear camera via constraints (more reliable than enumerating).
+    html5Qr.start(camConstraints, config, onDecode, () => {})
+      .catch(() => {
+        // Fall back to picking a camera from the device list.
+        return Html5Qrcode.getCameras().then((cams) => {
+          if (!cams || !cams.length) throw new Error("No camera found on this device.");
+          const camId = (cams.find((c) => /back|rear|environment/i.test(c.label)) || cams[0]).id;
+          return html5Qr.start(camId, config, onDecode, () => {});
+        });
       })
-      .catch(() => { /* no camera / insecure context — file fallback remains */ });
+      .catch((err) => {
+        const name = (err && err.name) || "";
+        let msg = "Couldn't start the camera. Use \u201cScan from image\u201d instead.";
+        if (/NotAllowedError|Permission/i.test(name))
+          msg = "Camera permission was blocked. Allow camera access in the browser, then reopen the scanner — or use \u201cScan from image\u201d.";
+        else if (/NotFoundError|No camera/i.test(name + (err && err.message)))
+          msg = "No camera was found on this device. Use \u201cScan from image\u201d instead.";
+        else if (/NotReadableError|TrackStart/i.test(name))
+          msg = "The camera is in use by another app. Close it and reopen the scanner, or use \u201cScan from image\u201d.";
+        setStatus(msg, true);
+      });
   }
 
   // ---- Inject the "Scan QR to Prefill" button into the data-entry step -----
