@@ -1,4 +1,3 @@
-
 // Global State
 let sessionId = null;
 let image = new Image(); // For verification/box selection (Step 1)
@@ -1125,6 +1124,8 @@ let captureStepIndex = 0;
 let capturedPrints = {}; // Map of ID -> Base64
 let currentCaptureImage = null;
 let reconnectTimer = null;
+let isRolledPhase = false;     // true while waiting for ROLLED capture_result messages
+let rolledFingersReceived = 0;
 
 // Settings
 let scannerIP = localStorage.getItem('scanner_ip') || 'localhost';
@@ -1194,6 +1195,27 @@ function initCaptureMode() {
                 acceptCapture();
             } else {
                 showCaptureResult(finalImg);
+            }
+        } else if (msg.type === 'capture_result') {
+            // Per-finger result from ROLLED sequence
+            const fingerKey = msg.finger.toString();
+            capturedPrints[fingerKey] = msg.image;
+            rolledFingersReceived++;
+            renderCaptureGallery();
+            logToConsole(`Rolled finger ${msg.finger} captured (quality: ${msg.quality})`);
+            document.getElementById('capture-instruction').textContent =
+                `Collecting rolled fingerprints (${rolledFingersReceived}/10)...`;
+            previewEl.src = "data:image/png;base64," + msg.image;
+
+            if (rolledFingersReceived >= 10) {
+                isRolledPhase = false;
+                rolledFingersReceived = 0;
+                logToConsole("Rolled sequence complete — continuing to slap captures.");
+                updateCaptureUI();
+                const isExpress = document.getElementById('chk-express-mode').checked;
+                if (isExpress && captureStepIndex < captureSequence.length) {
+                    setTimeout(() => startCapture(), 500);
+                }
             }
         }
     };
@@ -1423,22 +1445,33 @@ function startCapture() {
     const currentItem = captureSequence[captureStepIndex];
     if (!currentItem) return;
 
-    // Send generic START_CAPTURE. 
-    // The param usually tells the scanner what to expect (e.g. flat vs roll). 
-    // If we want "flat scans" for everything (as user requested), we send "FLAT" or similar?
-    // Existing code sent "L_SLAP", "R_SLAP". The helper probably decides based on that.
-    // If we send raw expectation, maybe we need to update Helper? 
-    // Assuming Helper just takes a string title or mode.
-    // Ideally we pass "FLAT" for all because user said "capture as flat scans".
-    // But passing legacy "L_SLAP" might trigger specific auto-capture logic.
-    // For Rolled fingers (1-10), we might want to capture as flats.
-    // I'll send the ID or Label.
+    const itemId = parseInt(currentItem.id);
+
+    // Rolled fingers (1-10) in full mode: send a single ROLLED command and
+    // collect per-finger capture_result messages automatically.
+    if (captureMode === 'full' && itemId >= 1 && itemId <= 10) {
+        isRolledPhase = true;
+        rolledFingersReceived = 0;
+        // Advance captureStepIndex past all rolled steps so the next manual
+        // step shown after ROLLED finishes is the first slap.
+        while (captureStepIndex < captureSequence.length &&
+               parseInt(captureSequence[captureStepIndex].id) >= 1 &&
+               parseInt(captureSequence[captureStepIndex].id) <= 10) {
+            captureStepIndex++;
+        }
+        document.getElementById('capture-instruction').textContent =
+            "Collecting rolled fingerprints (0/10)...";
+        ws.send(JSON.stringify({ action: "ROLLED" }));
+        return;
+    }
 
     ws.send(JSON.stringify({ action: "START_CAPTURE", param: currentItem.id }));
 }
 
 function cancelCapture() {
     ws.send(JSON.stringify({ action: "CANCEL" }));
+    isRolledPhase = false;
+    rolledFingersReceived = 0;
     resetCaptureButtons(true);
 }
 
@@ -2356,54 +2389,4 @@ if (btnSaveConfig) {
             localStorage.setItem('scanner_port', scannerPort);
 
             // Update the modal inputs too, if they exist
-            const modalIp = document.getElementById('setting-scanner-ip');
-            const modalPort = document.getElementById('setting-scanner-port');
-            if (modalIp) modalIp.value = scannerIP;
-            if (modalPort) modalPort.value = scannerPort;
-
-            // Show success feedback
-            const originalText = btnSaveConfig.textContent;
-            btnSaveConfig.textContent = "Saved!";
-            btnSaveConfig.style.background = '#27ae60';
-            setTimeout(() => {
-                btnSaveConfig.textContent = originalText;
-                btnSaveConfig.style.background = ''; // Revert to CSS default
-            }, 1500);
-
-        } else {
-            alert("Please enter valid IP and Port");
-        }
-    };
-}
-
-// Overwrite Type-14 click handler
-if (btnGenAtf) {
-    btnGenAtf.onclick = () => {
-        if (!enableType14) return;
-
-        selectedGenMode = 'atf';
-        boxes = getBoxesForMode('atf');
-        currentSubStep = 'box';
-        updateWizardUI();
-        requestAnimationFrame(initVerifyStep);
-    };
-}
-
-if (btnCapModeSlaps) {
-    btnCapModeSlaps.onclick = () => startCaptureSession('slaps');
-}
-
-// Initialize on Load
-applySettings();
-initSettingsPage();
-
-function applyDemographicDefaults() {
-    if (defaultBypassSSN) {
-        const chk = document.getElementById('bypass-ssn');
-        if (chk && !chk.checked) {
-            chk.checked = true;
-            // Trigger change event to update UI state (disable input)
-            chk.dispatchEvent(new Event('change'));
-        }
-    }
-}
+            const modalIp = document.get
