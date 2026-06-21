@@ -1123,6 +1123,7 @@ let captureMode = 'slaps'; // 'slaps' or 'full'
 let captureSequence = [];
 let captureStepIndex = 0;
 let capturedPrints = {}; // Map of ID -> Base64
+let capturedPrintQualities = {}; // Map of ID -> NFIQ quality score
 let currentCaptureImage = null;
 let currentCaptureQuality = 0; // NFIQ quality 0-100 (100=best) from last result
 let reconnectTimer = null;
@@ -1204,6 +1205,7 @@ function initCaptureMode() {
             if (!msg.finger || msg.finger <= 0) return; // ignore finger=0 ghost events
             const fingerKey = msg.finger.toString();
             capturedPrints[fingerKey] = msg.image;
+            capturedPrintQualities[fingerKey] = msg.quality || 0;
             rolledFingersReceived++;
             renderCaptureGallery();
             logToConsole(`Rolled finger ${msg.finger} captured (quality: ${msg.quality})`);
@@ -1263,6 +1265,7 @@ function initCaptureMode() {
 function startCaptureSession(mode) {
     captureMode = mode;
     capturedPrints = {};
+    capturedPrintQualities = {};
     captureStepIndex = 0;
 
     if (mode === 'slaps') {
@@ -1380,13 +1383,33 @@ function renderCaptureGallery() {
             ph.textContent = 'Skipped (Unprintable)';
             div.appendChild(ph);
         } else {
+            const imgWrap = document.createElement('div');
+            imgWrap.style.position = 'relative';
+            imgWrap.style.width = '100%';
+            imgWrap.style.height = '80px';
+            imgWrap.style.background = '#000';
+
             const img = document.createElement('img');
             img.src = "data:image/png;base64," + capturedPrints[k];
             img.style.width = '100%';
             img.style.height = '80px';
             img.style.objectFit = 'contain';
             img.style.backgroundColor = '#000';
-            div.appendChild(img);
+            imgWrap.appendChild(img);
+
+            // Quality badge
+            const q = capturedPrintQualities[k] !== undefined ? capturedPrintQualities[k] : null;
+            if (q !== null) {
+                const qColor  = q >= 75 ? '#27ae60' : q >= 50 ? '#e67e22' : '#e74c3c';
+                const qLabel  = q >= 75 ? 'Good' : q >= 50 ? 'Fair' : 'Poor';
+                const badge = document.createElement('div');
+                badge.textContent = `${q} ${qLabel}`;
+                badge.style.cssText = `position:absolute;bottom:3px;right:3px;background:${qColor};`+
+                    `color:#fff;font-size:10px;font-weight:bold;padding:2px 5px;`+
+                    `border-radius:4px;opacity:0.92;pointer-events:none;`;
+                imgWrap.appendChild(badge);
+            }
+            div.appendChild(imgWrap);
         }
 
         container.appendChild(div);
@@ -1483,6 +1506,7 @@ function resetCapture() {
     document.getElementById('capture-wizard').classList.add('hidden');
     document.getElementById('capture-mode-select').classList.remove('hidden');
     capturedPrints = {};
+    capturedPrintQualities = {};
     captureStepIndex = 0;
 }
 
@@ -1490,6 +1514,7 @@ function acceptCapture() {
     const currentItem = captureSequence[captureStepIndex];
     if (currentItem && currentCaptureImage) {
         capturedPrints[currentItem.id] = currentCaptureImage;
+        capturedPrintQualities[currentItem.id] = currentCaptureQuality;
         captureStepIndex++;
         clearQualityOverlay();
         updateCaptureUI();
