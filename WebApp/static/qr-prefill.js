@@ -188,7 +188,7 @@
       </div>
 
       <div id="qr-decode-tmp" style="display:none;"></div>
-      <canvas id="qr-snap-canvas" style="display:none;max-width:200px;border:2px solid #555;border-radius:4px;"></canvas>
+      <canvas id="qr-snap-canvas" style="display:none;max-width:320px;border:2px solid #bada55;border-radius:4px;"></canvas>
       <canvas id="qr-crop-canvas" style="display:none;"></canvas>
 
       <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center;">
@@ -257,22 +257,29 @@
         .finally(() => { e.target.value = ""; });
     };
 
-    // ---- snap: try ImageCapture first (no canvas taint), then canvas fallback ----
+    // ---- snap: always capture frame to canvas first so user sees what was grabbed ----
     snapBtn.onclick = async () => {
       if (!cameraStream || video.videoWidth === 0) {
         setStatus("Camera not ready yet — wait a moment.", true);
         return;
       }
-      setStatus("Decoding…", false);
+      setStatus("Capturing frame…", false);
       snapBtn.disabled = true;
 
       try {
+        // ALWAYS draw the current video frame to canvas so user can see what was captured
+        canvas.width  = video.videoWidth;
+        canvas.height = video.videoHeight;
+        canvas.getContext("2d").drawImage(video, 0, 0);
+        canvas.style.display = "block";
+
         let result = null;
 
+        // 1. BarcodeDetector paths (when available — Chrome on Android/Mac, or flag enabled)
         if (hasBD) {
           const detector = new BarcodeDetector({ formats: ['qr_code'] });
 
-          // 1. ImageCapture.grabFrame() — straight from camera track, no canvas taint
+          // 1a. ImageCapture.grabFrame() — direct from track, higher quality than canvas
           if ('ImageCapture' in window && cameraStream.getVideoTracks().length) {
             try {
               const ic = new ImageCapture(cameraStream.getVideoTracks()[0]);
@@ -282,18 +289,14 @@
             } catch (_) {}
           }
 
-          // 2. Canvas capture — show preview thumbnail so user can see what was captured
+          // 1b. Full canvas
           if (result === null) {
-            canvas.width  = video.videoWidth;
-            canvas.height = video.videoHeight;
-            canvas.getContext("2d").drawImage(video, 0, 0);
-            canvas.style.display = "block";
             const codes = await detector.detect(canvas);
             if (codes.length) result = codes[0].rawValue;
           }
 
-          // 3. Center-square crop upscaled to 512px
-          if (result === null && canvas.width > 0) {
+          // 1c. Center-square crop upscaled to 512px
+          if (result === null) {
             const sq = Math.min(canvas.width, canvas.height);
             cropCanvas.width  = 512;
             cropCanvas.height = 512;
@@ -307,8 +310,9 @@
           }
         }
 
-        // 4. ZXing fallback via Html5Qrcode
-        if (result === null && typeof Html5Qrcode !== "undefined" && canvas.width > 0) {
+        // 2. ZXing/Html5Qrcode fallback — always runs on the canvas we captured above
+        if (result === null && typeof Html5Qrcode !== "undefined") {
+          setStatus("Trying secondary decoder…", false);
           result = await new Promise((resolve, reject) => {
             canvas.toBlob((blob) => {
               if (!blob) { reject(new Error("toBlob returned null")); return; }
@@ -320,13 +324,13 @@
           });
         }
 
-        if (!result) throw new Error("QR code not detected in frame");
+        if (!result) throw new Error("QR code not detected — check the preview above and re-aim");
         canvas.style.display = "none";
         stopCamera();
         handleDecodedText(result);
       } catch (err) {
         const msg = (err && (err.message || err.name)) || "unknown";
-        setStatus(`No QR code found (${msg}) — re-aim and try again.`, true);
+        setStatus(`No QR code found — check the captured preview above to verify the QR is in frame.`, true);
         snapBtn.disabled = false;
       }
     };
