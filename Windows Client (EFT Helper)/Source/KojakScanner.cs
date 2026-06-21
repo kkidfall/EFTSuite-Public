@@ -600,7 +600,17 @@ public class KojakScanner : IDisposable
 
 	// ---- NFIQ quality scoring ----
 
-	// NFIQ1 score 1-5 (1=excellent, 5=poor) → 0-100 (100=best)
+	private static bool _nfiq2Initialized = false;
+
+	private static void EnsureNfiq2Initialized()
+	{
+		if (_nfiq2Initialized) return;
+		int rc = DLL._IBSU_NFIQ2_Initialize();
+		_nfiq2Initialized = (rc >= 0) || DLL._IBSU_NFIQ2_IsInitialized();
+		Console.WriteLine($"[NFIQ2] Initialize rc={rc} initialized={_nfiq2Initialized}");
+	}
+
+	// NFIQ2 score 0-100 (100=best). Falls back to NFIQ1 mapped 0-100 if NFIQ2 fails.
 	private int ComputeNfiqQuality(DLL.IBSU_ImageData image)
 	{
 		try
@@ -612,13 +622,26 @@ public class KojakScanner : IDisposable
 			byte[] buf = new byte[bufLen];
 			Marshal.Copy(image.Buffer, buf, 0, bufLen);
 
-			int score = 0;
-			int rc = DLL._IBSU_GetNFIQScoreEx(_devHandle, buf,
-				image.Width, image.Height, image.Pitch, image.BitsPerPixel, ref score);
-			Console.WriteLine($"[NFIQ] rc={rc} score={score} w={image.Width} h={image.Height} pitch={image.Pitch} bpp={image.BitsPerPixel} bufLen={bufLen}");
+			// Try NFIQ2 first (true 0-100 score)
+			EnsureNfiq2Initialized();
+			if (_nfiq2Initialized)
+			{
+				int nfiq2Score = 0;
+				uint dpi = (image.ResolutionX > 0) ? (uint)Math.Round(image.ResolutionX) : 500u;
+				int rc2 = DLL._IBSU_NFIQ2_ComputeScore(buf, image.Width, image.Height, dpi, ref nfiq2Score);
+				Console.WriteLine($"[NFIQ2] rc={rc2} score={nfiq2Score} dpi={dpi} w={image.Width} h={image.Height}");
+				if (rc2 >= 0 && nfiq2Score >= 0 && nfiq2Score <= 100)
+					return nfiq2Score;
+				Console.WriteLine("[NFIQ2] Failed, falling back to NFIQ1");
+			}
 
-			if (rc >= 0 && score >= 1 && score <= 5)
-				return (5 - score) * 25;  // NFIQ 1→100, 2→75, 3→50, 4→25, 5→0
+			// Fallback: NFIQ1 (1-5) mapped to 0-100
+			int score1 = 0;
+			int rc1 = DLL._IBSU_GetNFIQScoreEx(_devHandle, buf,
+				image.Width, image.Height, image.Pitch, image.BitsPerPixel, ref score1);
+			Console.WriteLine($"[NFIQ1] rc={rc1} score={score1}");
+			if (rc1 >= 0 && score1 >= 1 && score1 <= 5)
+				return (5 - score1) * 25;  // NFIQ 1→100, 2→75, 3→50, 4→25, 5→0
 		}
 		catch (Exception ex)
 		{

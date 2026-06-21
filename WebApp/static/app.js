@@ -1184,9 +1184,9 @@ function initCaptureMode() {
 
             let finalImg = msg.image;
             const currentItem = captureSequence[captureStepIndex];
-            // Mirror Slaps (13, 14, 15) due to scanner reversing them
-            if (currentItem && ['13', '14', '15'].includes(currentItem.id)) {
-                logToConsole("Correcting mirrored slap...");
+            // Mirror Thumbs only (15) — 4-finger slaps (13, 14) are not reversed
+            if (currentItem && ['15'].includes(currentItem.id)) {
+                logToConsole("Correcting mirrored thumbs...");
                 finalImg = await mirrorBase64(msg.image);
             }
 

@@ -847,5 +847,35 @@ namespace IBscanUltimate
 			try { return IBSU_GetNFIQScoreEx(handle, imgBuffer, width, height, pitch, bitsPerPixel, ref pScore); }
 			catch { return -1; }
 		}
+
+		// ---- NFIQ2 scoring (IBScanNFIQ2.DLL) ----
+		// Score range: 0-100 (0=poor, 100=excellent). Must call Initialize once before ComputeScore.
+
+		[DllImport("IBScanNFIQ2.DLL", CallingConvention = CallingConvention.Cdecl)]
+		private static extern int IBSU_NFIQ2_Initialize();
+
+		[DllImport("IBScanNFIQ2.DLL", CallingConvention = CallingConvention.Cdecl)]
+		private static extern bool IBSU_NFIQ2_IsInitialized();
+
+		[DllImport("IBScanNFIQ2.DLL", CallingConvention = CallingConvention.Cdecl)]
+		private static extern int IBSU_NFIQ2_ComputeScore(byte[] pImgBuf, uint nWidth, uint nHeight, uint nImgDPI, ref int pScore);
+
+		public static int _IBSU_NFIQ2_Initialize()
+		{
+			try { return IBSU_NFIQ2_Initialize(); }
+			catch (Exception ex) { Console.WriteLine("[NFIQ2] Initialize error: " + ex.Message); return -1; }
+		}
+
+		public static bool _IBSU_NFIQ2_IsInitialized()
+		{
+			try { return IBSU_NFIQ2_IsInitialized(); }
+			catch { return false; }
+		}
+
+		public static int _IBSU_NFIQ2_ComputeScore(byte[] pImgBuf, uint nWidth, uint nHeight, uint nImgDPI, ref int pScore)
+		{
+			try { return IBSU_NFIQ2_ComputeScore(pImgBuf, nWidth, nHeight, nImgDPI, ref pScore); }
+			catch (Exception ex) { Console.WriteLine("[NFIQ2] ComputeScore error: " + ex.Message); return -1; }
+		}
 	}
 }
