@@ -272,56 +272,127 @@
         canvas.height = video.videoHeight;
         canvas.getContext("2d").drawImage(video, 0, 0);
         canvas.style.display = "block";
+        window._qrCanvas = canvas; // debug handle
 
         let result = null;
 
-        // 1. BarcodeDetector paths (when available — Chrome on Android/Mac, or flag enabled)
-        if (hasBD) {
-          const detector = new BarcodeDetector({ formats: ['qr_code'] });
+        // Helper: decode a canvas element with all available decoders
+        async function tryDecodeCanvas(src, label) {
+          // A. jsQR — direct pixel data, excellent for screen QR codes
+          if (typeof jsQR !== "undefined") {
+            const ctx = src.getContext("2d");
+            const id = ctx.getImageData(0, 0, src.width, src.height);
+            console.log(`[QR:${label}] jsQR attempt ${src.width}x${src.height}`);
+            const code = jsQR(id.data, id.width, id.height, { inversionAttempts: "attemptBoth" });
+            console.log(`[QR:${label}] jsQR result:`, code ? code.data.substring(0,40) : null);
+            if (code) return code.data;
+          }
 
-          // 1a. ImageCapture.grabFrame() — direct from track, higher quality than canvas
-          if ('ImageCapture' in window && cameraStream.getVideoTracks().length) {
+          // B. BarcodeDetector (Chrome flag or Android/Mac)
+          if (hasBD) {
             try {
-              const ic = new ImageCapture(cameraStream.getVideoTracks()[0]);
-              const bitmap = await ic.grabFrame();
-              const codes = await detector.detect(bitmap);
-              if (codes.length) result = codes[0].rawValue;
+              const detector = new BarcodeDetector({ formats: ['qr_code'] });
+              const codes = await detector.detect(src);
+              if (codes.length) return codes[0].rawValue;
             } catch (_) {}
           }
 
-          // 1b. Full canvas
-          if (result === null) {
-            const codes = await detector.detect(canvas);
-            if (codes.length) result = codes[0].rawValue;
+          // C. ZXing via Html5Qrcode scanFile
+          if (typeof Html5Qrcode !== "undefined") {
+            return new Promise((resolve, reject) => {
+              src.toBlob((blob) => {
+                if (!blob) { reject(new Error("toBlob null")); return; }
+                const reader = new Html5Qrcode("qr-decode-tmp");
+                reader.scanFile(new File([blob], label + ".png", { type: "image/png" }), false)
+                  .then(resolve).catch(reject)
+                  .finally(() => { try { reader.clear(); } catch (_) {} });
+              }, "image/png");
+            });
           }
 
-          // 1c. Center-square crop upscaled to 512px
-          if (result === null) {
-            const sq = Math.min(canvas.width, canvas.height);
-            cropCanvas.width  = 512;
-            cropCanvas.height = 512;
-            cropCanvas.getContext("2d").drawImage(
-              canvas,
-              (canvas.width - sq) / 2, (canvas.height - sq) / 2, sq, sq,
-              0, 0, 512, 512
-            );
-            const codes = await detector.detect(cropCanvas);
-            if (codes.length) result = codes[0].rawValue;
-          }
+          return null;
         }
 
-        // 2. ZXing/Html5Qrcode fallback — always runs on the canvas we captured above
-        if (result === null && typeof Html5Qrcode !== "undefined") {
-          setStatus("Trying secondary decoder…", false);
-          result = await new Promise((resolve, reject) => {
-            canvas.toBlob((blob) => {
-              if (!blob) { reject(new Error("toBlob returned null")); return; }
-              const reader = new Html5Qrcode("qr-decode-tmp");
-              reader.scanFile(new File([blob], "snap.png", { type: "image/png" }), false)
-                .then(resolve).catch(reject)
-                .finally(() => { try { reader.clear(); } catch (_) {} });
-            }, "image/png");
-          });
+        // Helper: draw scaled copy of canvas into a new canvas of given max width
+        function scaledCanvas(src, maxW) {
+          const scale = Math.min(1, maxW / src.width);
+          const c = document.createElement("canvas");
+          c.width  = Math.round(src.width  * scale);
+          c.height = Math.round(src.height * scale);
+          c.getContext("2d").drawImage(src, 0, 0, c.width, c.height);
+          return c;
+        }
+
+        // Helper: apply image preprocessing to fight moire/blur from screen→camera
+        // blur (px) removes moire bands; contrast multiplier binarizes modules
+        function preprocessCanvas(src, blurPx, contrast) {
+          const c = document.createElement("canvas");
+          c.width = src.width; c.height = src.height;
+          const ctx = c.getContext("2d");
+          ctx.filter = `grayscale(1) blur(${blurPx}px) contrast(${contrast})`;
+          ctx.drawImage(src, 0, 0);
+          ctx.filter = "none";
+          return c;
+        }
+
+        // 1. Try ImageCapture.grabFrame() with BarcodeDetector (highest quality, no canvas taint)
+        if (result === null && hasBD && 'ImageCapture' in window && cameraStream.getVideoTracks().length) {
+          try {
+            const ic = new ImageCapture(cameraStream.getVideoTracks()[0]);
+            const bitmap = await ic.grabFrame();
+            const codes = await new BarcodeDetector({ formats: ['qr_code'] }).detect(bitmap);
+            if (codes.length) result = codes[0].rawValue;
+          } catch (_) {}
+        }
+
+        // 2. Full-resolution canvas — raw
+        if (result === null) {
+          setStatus("Trying full-res decode…", false);
+          try { result = await tryDecodeCanvas(canvas, "full"); } catch (_) {}
+        }
+
+        // 3. Downscaled to 1280px
+        if (result === null) {
+          setStatus("Trying 1280px scale…", false);
+          try { result = await tryDecodeCanvas(scaledCanvas(canvas, 1280), "1280"); } catch (_) {}
+        }
+
+        // 4. Downscaled to 800px
+        if (result === null) {
+          setStatus("Trying 800px scale…", false);
+          try { result = await tryDecodeCanvas(scaledCanvas(canvas, 800), "800"); } catch (_) {}
+        }
+
+        // 5. Center-square crop at 512px
+        if (result === null) {
+          setStatus("Trying center crop…", false);
+          const sq = Math.min(canvas.width, canvas.height);
+          cropCanvas.width  = 512;
+          cropCanvas.height = 512;
+          cropCanvas.getContext("2d").drawImage(
+            canvas,
+            (canvas.width - sq) / 2, (canvas.height - sq) / 2, sq, sq,
+            0, 0, 512, 512
+          );
+          try { result = await tryDecodeCanvas(cropCanvas, "crop"); } catch (_) {}
+        }
+
+        // 6. Preprocessed 800px: light blur + contrast 4 (mild moire removal)
+        if (result === null) {
+          setStatus("Trying preprocessed (light)…", false);
+          try { result = await tryDecodeCanvas(preprocessCanvas(scaledCanvas(canvas, 800), 1, 4), "pre-light"); } catch (_) {}
+        }
+
+        // 7. Preprocessed 600px: stronger blur + contrast 8 (heavy moire removal)
+        if (result === null) {
+          setStatus("Trying preprocessed (strong)…", false);
+          try { result = await tryDecodeCanvas(preprocessCanvas(scaledCanvas(canvas, 600), 2, 8), "pre-strong"); } catch (_) {}
+        }
+
+        // 8. Preprocessed center crop 512px: blur + high contrast (best for screen QR)
+        if (result === null) {
+          setStatus("Trying preprocessed crop…", false);
+          try { result = await tryDecodeCanvas(preprocessCanvas(cropCanvas, 1.5, 6), "pre-crop"); } catch (_) {}
         }
 
         if (!result) throw new Error("QR code not detected — check the preview above and re-aim");
@@ -400,21 +471,259 @@
     });
   }
 
-  // ---- Inject button ------------------------------------------------------
+  // ---- Phone scan (Option 3): show QR of /scan URL, poll for result --------
+  let _phonePolling = null;
+
+  function openPhoneScanner() {
+    if (_phonePolling) clearInterval(_phonePolling);
+
+    // Build the overlay
+    const ov = document.createElement("div");
+    ov.id = "phone-scan-overlay";
+    ov.style.cssText =
+      "position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;" +
+      "display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:20px;";
+    ov.innerHTML = `
+      <div style="color:#fff;font-size:1.1rem;font-weight:bold;">Phone Camera Scan</div>
+      <div style="color:#aaa;font-size:.85rem;text-align:center;max-width:320px;">
+        Scan the QR below with your phone, then use your phone camera to scan the patient's QR.
+      </div>
+      <div id="phone-qr-holder" style="background:#fff;padding:12px;border-radius:8px;"></div>
+      <div id="phone-scan-url" style="color:#bada55;font-size:.8rem;word-break:break-all;max-width:320px;text-align:center;"></div>
+      <div id="phone-scan-status" style="color:#bada55;font-size:.9rem;text-align:center;min-height:1.4em;">
+        Waiting for phone scan…
+      </div>
+      <button type="button" class="btn btn-secondary" id="phone-scan-cancel">Cancel</button>`;
+    document.body.appendChild(ov);
+
+    document.getElementById("phone-scan-cancel").onclick = () => {
+      if (_phonePolling) { clearInterval(_phonePolling); _phonePolling = null; }
+      ov.remove();
+    };
+
+    // Detect real LAN IP via WebRTC
+    // Score: 192.168.x = 0 (best), 10.x = 1, 172.x = 3 (Docker bridge lives here), loopback = 4
+    function scoreIP(ip) {
+      if (/^192\.168\./.test(ip)) return 0;
+      if (/^10\./.test(ip))       return 1;
+      if (/^172\./.test(ip))      return 3; // Docker bridge (172.17.x.x) — avoid
+      if (/^127\./.test(ip))      return 4;
+      return 2;
+    }
+
+    function getAllLanIPs() {
+      return new Promise((resolve) => {
+        try {
+          const pc = new RTCPeerConnection({ iceServers: [] });
+          pc.createDataChannel("");
+          pc.createOffer().then(o => pc.setLocalDescription(o));
+          const found = new Set();
+          pc.onicecandidate = (e) => {
+            if (!e.candidate) {
+              pc.close();
+              resolve([...found].sort((a, b) => scoreIP(a) - scoreIP(b)));
+            } else {
+              const m = e.candidate.candidate.match(/(\d+\.\d+\.\d+\.\d+)/);
+              if (m && m[1] !== "0.0.0.0") found.add(m[1]);
+            }
+          };
+          setTimeout(() => { try { pc.close(); } catch(_){} resolve([...found]); }, 3000);
+        } catch (_) { resolve([]); }
+      });
+    }
+
+    function buildPhoneQR(url) {
+      const holder = document.getElementById("phone-qr-holder");
+      const urlEl  = document.getElementById("phone-scan-url");
+      if (!holder) return;
+      // Clear previous content
+      holder.innerHTML = "";
+      urlEl.textContent = url;
+      if (typeof QRCode !== "undefined") {
+        new QRCode(holder, { text: url, width: 200, height: 200, correctLevel: QRCode.CorrectLevel.M });
+      } else {
+        holder.innerHTML = `<p style="color:#111;font-size:.75rem;word-break:break-all;">${url}</p>`;
+      }
+    }
+    // Make buildPhoneQR accessible from inline onclick
+    window._buildPhoneQR = buildPhoneQR;
+
+    getAllLanIPs().then(ips => {
+      const port = 8080;
+      const holder = document.getElementById("phone-qr-holder");
+
+      // Best candidate: first IP that isn't 172.x and isn't loopback
+      const best = ips.find(ip => scoreIP(ip) <= 1);
+
+      if (best) {
+        buildPhoneQR(`http://${best}:${port}/scan`);
+        // If there are other candidates, show them as alternates below the QR
+        const others = ips.filter(ip => ip !== best && scoreIP(ip) <= 2);
+        if (others.length) {
+          const altDiv = document.createElement("div");
+          altDiv.style.cssText = "margin-top:10px;font-size:.75rem;color:#555;text-align:center;";
+          altDiv.innerHTML = "Wrong IP? Try: " + others.map(ip =>
+            `<a href="#" style="color:#0066cc;margin:0 4px;" onclick="event.preventDefault();window._buildPhoneQR('http://${ip}:${port}/scan');">${ip}</a>`
+          ).join("");
+          holder.appendChild(altDiv);
+        }
+      } else {
+        // No good IP found — show manual input + any detected IPs as hints
+        const hint = ips.length ? `<br><small style="color:#888">Detected: ${ips.join(", ")}</small>` : "";
+        holder.innerHTML = `
+          <div style="color:#333;font-size:.85rem;padding:10px;text-align:center;">
+            Enter your computer's LAN IP:${hint}<br>
+            <input id="manual-ip" type="text" placeholder="e.g. 192.168.1.50"
+              style="margin-top:8px;padding:6px;font-size:1rem;border-radius:4px;border:1px solid #aaa;width:180px;">
+            <br>
+            <button onclick="const v=document.getElementById('manual-ip').value.trim();if(v)window._buildPhoneQR('http://'+v+':${port}/scan');"
+              style="margin-top:8px;padding:6px 14px;cursor:pointer;">Generate QR</button>
+          </div>`;
+      }
+    });
+
+    // Poll for incoming prefill data
+    _phonePolling = setInterval(() => {
+      fetch("/api/prefill-pending")
+        .then(r => r.json())
+        .then(({ data }) => {
+          if (data) {
+            clearInterval(_phonePolling);
+            _phonePolling = null;
+            document.getElementById("phone-scan-status").textContent = "✓ Received! Filling form…";
+            setTimeout(() => {
+              ov.remove();
+              handleDecodedText(data);
+            }, 600);
+          }
+        })
+        .catch(() => {});
+    }, 2000);
+  }
+
+  // ---- USB barcode scanner (Option 4): focused text input ----------------
+  function openUsbScanner() {
+    const form = document.getElementById("type2-form");
+    if (!form) return;
+
+    const ov = document.createElement("div");
+    ov.id = "usb-scan-overlay";
+    ov.style.cssText =
+      "position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;" +
+      "display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:20px;";
+    ov.innerHTML = `
+      <div style="color:#fff;font-size:1.1rem;font-weight:bold;">USB Barcode Scanner</div>
+      <div style="color:#aaa;font-size:.85rem;text-align:center;max-width:360px;">
+        Click the field below to focus it, then scan the QR code with your USB scanner.
+      </div>
+      <input id="usb-scan-input" type="text" autocomplete="off"
+        placeholder="Scanner input — click here then scan"
+        style="width:min(400px,90vw);padding:14px;font-size:1rem;border-radius:8px;border:2px solid #bada55;
+               background:#1a1a1a;color:#fff;outline:none;text-align:center;">
+      <div id="usb-scan-status" style="color:#bada55;font-size:.9rem;min-height:1.4em;text-align:center;">
+        Ready — scan a QR code
+      </div>
+      <button type="button" class="btn btn-secondary" id="usb-scan-cancel">Cancel</button>`;
+    document.body.appendChild(ov);
+
+    const inp = document.getElementById("usb-scan-input");
+    inp.focus();
+
+    document.getElementById("usb-scan-cancel").onclick = () => ov.remove();
+
+    // USB scanners typically finish with Enter (\n or \r)
+    inp.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const val = inp.value.trim();
+        if (!val) return;
+        document.getElementById("usb-scan-status").textContent = "Decoding…";
+        inp.value = "";
+        ov.remove();
+        handleDecodedText(val);
+      }
+    });
+
+    // Also handle paste + auto-detect (some scanners paste instead of typing)
+    inp.addEventListener("paste", () => {
+      setTimeout(() => {
+        const val = inp.value.trim();
+        if (val.startsWith("{")) {
+          inp.value = "";
+          ov.remove();
+          handleDecodedText(val);
+        }
+      }, 100);
+    });
+  }
+
+  // ---- Upload QR image (Option: patient shares image file) ----------------
+  function openUploadScanner() {
+    const ov = document.createElement("div");
+    ov.id = "upload-scan-overlay";
+    ov.style.cssText =
+      "position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;" +
+      "display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:20px;";
+    ov.innerHTML = `
+      <div style="color:#fff;font-size:1.1rem;font-weight:bold;">Upload QR Image</div>
+      <div style="color:#aaa;font-size:.85rem;text-align:center;max-width:320px;">
+        Patient screenshots their QR code and shares the image file. Select it below.
+      </div>
+      <label style="display:inline-block;padding:14px 28px;background:#2c6e49;color:#fff;
+                    border-radius:10px;font-size:1rem;cursor:pointer;" for="qr-upload-input">
+        📁 Choose Image File
+      </label>
+      <input id="qr-upload-input" type="file" accept="image/*" style="display:none;">
+      <div id="upload-scan-status" style="color:#bada55;font-size:.9rem;text-align:center;min-height:1.4em;"></div>
+      <button type="button" class="btn btn-secondary" id="upload-scan-cancel">Cancel</button>`;
+    document.body.appendChild(ov);
+
+    document.getElementById("upload-scan-cancel").onclick = () => ov.remove();
+
+    document.getElementById("qr-upload-input").addEventListener("change", async function() {
+      const file = this.files[0];
+      if (!file) return;
+      document.getElementById("upload-scan-status").textContent = "Uploading…";
+      const form = new FormData();
+      form.append("file", file);
+      try {
+        const res  = await fetch("/api/decode-qr", { method: "POST", body: form });
+        const json = await res.json();
+        if (json.ok) {
+          document.getElementById("upload-scan-status").textContent = "✓ Decoded! Filling form…";
+          setTimeout(() => { ov.remove(); handleDecodedText(json.data); }, 500);
+        } else {
+          document.getElementById("upload-scan-status").textContent =
+            "No QR found in image. Make sure you selected the QR screenshot.";
+          document.getElementById("upload-scan-status").style.color = "#ff7070";
+        }
+      } catch (e) {
+        document.getElementById("upload-scan-status").textContent = "Server error — try again.";
+        document.getElementById("upload-scan-status").style.color = "#ff7070";
+      }
+    });
+  }
+
+  // ---- Inject buttons -----------------------------------------------------
   function injectButton() {
     const form = document.getElementById("type2-form");
-    if (!form || document.getElementById("btn-scan-qr")) return;
+    if (!form || document.getElementById("btn-usb-scan")) return;
     const bar = document.createElement("div");
-    bar.style.cssText = "margin-bottom:16px;";
-    bar.innerHTML =
-      `<button type="button" id="btn-scan-qr" class="btn btn-secondary" style="width:100%;">
-         Scan QR to Prefill
-       </button>
-       <div style="color:#aaa;font-size:.85rem;margin-top:6px;text-align:center;">
-         Optional: scan an applicant's pre-fill QR, then verify every field.
-       </div>`;
+    bar.style.cssText = "margin-bottom:16px;display:flex;gap:6px;";
+    bar.innerHTML = `
+      <button type="button" id="btn-usb-scan" class="btn btn-secondary" style="flex:1;">
+        🔌 USB Scanner
+      </button>
+      <button type="button" id="btn-upload-scan" class="btn btn-secondary" style="flex:1;">
+        📁 Upload QR
+      </button>
+      <button type="button" id="btn-phone-scan" class="btn btn-secondary" style="flex:1;">
+        📷 Photo of Print
+      </button>`;
     form.parentNode.insertBefore(bar, form);
-    document.getElementById("btn-scan-qr").onclick = openScanner;
+    document.getElementById("btn-usb-scan").onclick    = openUsbScanner;
+    document.getElementById("btn-upload-scan").onclick  = openUploadScanner;
+    document.getElementById("btn-phone-scan").onclick   = openPhoneScanner;
   }
 
   if (document.readyState === "loading") {
